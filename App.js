@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import domtoimage from "dom-to-image";
@@ -110,8 +110,11 @@ const DEFAULT_CHORES = [
 ];
 
 // ---------- Utilities ----------
-const uniqPush = (arr, item) =>
-  arr.includes(item.trim()) ? arr : [...arr, item.trim()];
+const uniqPush = (arr, item) => {
+  const v = typeof item === "string" ? item.trim() : item;
+  if (!v) return arr;
+  return arr.includes(v) ? arr : [...arr, v];
+};
 
 const loadJSON = (key, fallback) => {
   try {
@@ -153,9 +156,11 @@ function App() {
   const [packedGear, setPackedGear] = useState([]);
   const [doneChores, setDoneChores] = useState([]);
 
-  // Archive & view state
+  // Archive & view state (persist archive)
+  const [archive, setArchive] = useState(() => loadJSON("tripArchive", []));
+  useEffect(() => saveJSON("tripArchive", archive), [archive]);
+
   const [saved, setSaved] = useState(null);
-  const [archive, setArchive] = useState([]);
   const [currentView, setCurrentView] = useState("home");
   const [editIndex, setEditIndex] = useState(null);
 
@@ -179,17 +184,17 @@ function App() {
   );
 
   // ---------- Combined libraries for dropdowns ----------
-  const ALL_GEAR = React.useMemo(() => {
+  const ALL_GEAR = useMemo(() => {
     const subpackItems = Object.values(SUBPACKS).flat();
     return [...new Set([...BASE_GEAR, ...subpackItems, ...userGearLib])];
   }, [userGearLib]);
 
-  const ALL_CHORES = React.useMemo(
+  const ALL_CHORES = useMemo(
     () => [...new Set([...DEFAULT_CHORES, ...userChoreLib])],
     [userChoreLib]
   );
 
-  const ALL_DOWNLOADS = React.useMemo(
+  const ALL_DOWNLOADS = useMemo(
     () => [...new Set([...DEFAULT_DOWNLOADS, ...userDownloadLib])],
     [userDownloadLib]
   );
@@ -199,12 +204,10 @@ function App() {
     if (!value) return;
     setGear((prev) => uniqPush(prev, value));
   };
-
   const handleChoreSelect = (value) => {
     if (!value) return;
     setChores((prev) => uniqPush(prev, value));
   };
-
   const handleDownloadSelect = (value) => {
     if (!value) return;
     setDownloads((prev) => uniqPush(prev, value));
@@ -247,10 +250,7 @@ function App() {
   // ---------- Subpacks ----------
   const addSubpack = (packName) => {
     const items = SUBPACKS[packName] || [];
-    setGear((prev) => [
-      ...prev,
-      ...items.filter((i) => !prev.includes(i)),
-    ]);
+    setGear((prev) => [...prev, ...items.filter((i) => !prev.includes(i))]);
   };
 
   // ---------- Remove line items ----------
@@ -260,6 +260,10 @@ function App() {
     setChores((prev) => prev.filter((_, idx) => idx !== i));
   const removeDownload = (i) =>
     setDownloads((prev) => prev.filter((_, idx) => idx !== i));
+
+  // Quick "save to library" next to a selected gear item
+  const saveGearItemToLibrary = (item) =>
+    setUserGearLib((prev) => uniqPush(prev, item));
 
   // ---------- Save trip (with map snapshot) ----------
   const handleSave = async () => {
@@ -304,19 +308,19 @@ function App() {
     setCurrentView("saved");
   };
 
-  // ---------- Edit existing trip ----------
+  // ---------- Edit / Delete saved trips ----------
   const handleEdit = (index) => {
     const t = archive[index];
     if (!t) return;
 
-    setWhere(t.where);
-    setDistance(t.distance);
-    setType(t.type);
-    setWho(t.who);
+    setWhere(t.where || "");
+    setDistance(t.distance || "");
+    setType(t.type || "");
+    setWho(t.who || "");
     const [sd = "", ed = ""] = (t.dates || "").split(" to ");
     setStartDate(sd);
     setEndDate(ed);
-    setMapLocation(t.mapLocation);
+    setMapLocation(t.mapLocation || null);
     setGear(t.gear || []);
     setChores(t.chores || []);
     setDownloads(t.downloads || []);
@@ -326,59 +330,149 @@ function App() {
     setCurrentView("new");
   };
 
+  const handleDeleteTrip = (index) => {
+    const ok = window.confirm("Delete this trip? This cannot be undone.");
+    if (!ok) return;
+    setArchive((prev) => prev.filter((_, i) => i !== index));
+    if (saved && archive[index] === saved) setSaved(null);
+  };
+
   // ---------- Views ----------
   if (currentView === "home") {
     return (
       <div className="app dark">
-        <div className="card" style={{ maxWidth: "720px", margin: "0 auto" }}>
+        <div className="card" style={{ maxWidth: "900px", margin: "0 auto" }}>
           <h1 className="title">Trip Planner Home</h1>
-          <button
-            className="btn primary"
-            onClick={() => {
-              setEditIndex(null);
-              setSaved(null);
-              setCurrentView("new");
-            }}
-          >
-            New Trip
-          </button>
 
-          <h2 style={{ marginTop: "1rem" }}>Saved Trips</h2>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button
+              className="btn primary"
+              onClick={() => {
+                setEditIndex(null);
+                setSaved(null);
+                setWhere("");
+                setDistance("");
+                setType("");
+                setWho("");
+                setStartDate("");
+                setEndDate("");
+                setEmergencyContact("");
+                setEmergencyTold(false);
+                setGear([]);
+                setChores([]);
+                setDownloads([]);
+                setMapLocation(null);
+                setCurrentView("new");
+              }}
+            >
+              New Trip
+            </button>
+          </div>
+
+          <h2 style={{ marginTop: 8 }}>Saved Trips</h2>
           {archive.length === 0 && <p>No trips yet.</p>}
           <ul>
             {archive.map((t, i) => (
               <li
                 key={i}
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto auto auto",
                   gap: "0.5rem",
                   alignItems: "center",
+                  padding: "6px 0",
                 }}
               >
                 <div>
                   <strong>{t.where || "Untitled Trip"}</strong>
                   <div style={{ fontSize: 12, opacity: 0.7 }}>{t.dates}</div>
                 </div>
-                <div>
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      setSaved(t);
-                      setPackedGear([]);
-                      setDoneChores([]);
-                      setCurrentView("saved");
-                    }}
-                  >
-                    View
-                  </button>
-                  <button className="btn" onClick={() => handleEdit(i)}>
-                    Edit
-                  </button>
-                </div>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setSaved(t);
+                    setPackedGear([]);
+                    setDoneChores([]);
+                    setCurrentView("saved");
+                  }}
+                >
+                  View
+                </button>
+                <button className="btn" onClick={() => handleEdit(i)}>
+                  Edit
+                </button>
+                <button className="btn" onClick={() => handleDeleteTrip(i)}>
+                  Delete
+                </button>
               </li>
             ))}
           </ul>
+
+          {/* ---- Library Manager (remove items from user libraries) ---- */}
+          <h2 style={{ marginTop: 24 }}>Manage Libraries</h2>
+          <p style={{ opacity: 0.8, marginBottom: 8 }}>
+            These are your <em>custom</em> items you added. Built-ins and sub-packs aren’t listed here.
+          </p>
+
+          <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit,minmax(250px,1fr))" }}>
+            {/* Gear Library */}
+            <div className="card" style={{ background: "rgba(255,255,255,0.03)" }}>
+              <h3>User Gear Library</h3>
+              {userGearLib.length === 0 && <p style={{ opacity: 0.7 }}>No custom gear yet.</p>}
+              <ul>
+                {userGearLib.map((g) => (
+                  <li key={g} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    {g}
+                    <button
+                      className="btn"
+                      onClick={() => setUserGearLib((prev) => prev.filter((x) => x !== g))}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Chore Library */}
+            <div className="card" style={{ background: "rgba(255,255,255,0.03)" }}>
+              <h3>User Chore Library</h3>
+              {userChoreLib.length === 0 && <p style={{ opacity: 0.7 }}>No custom chores yet.</p>}
+              <ul>
+                {userChoreLib.map((c) => (
+                  <li key={c} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    {c}
+                    <button
+                      className="btn"
+                      onClick={() => setUserChoreLib((prev) => prev.filter((x) => x !== c))}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Download Library */}
+            <div className="card" style={{ background: "rgba(255,255,255,0.03)" }}>
+              <h3>User Download Library</h3>
+              {userDownloadLib.length === 0 && <p style={{ opacity: 0.7 }}>No custom downloads yet.</p>}
+              <ul>
+                {userDownloadLib.map((d) => (
+                  <li key={d} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    {d}
+                    <button
+                      className="btn"
+                      onClick={() => setUserDownloadLib((prev) => prev.filter((x) => x !== d))}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
         </div>
       </div>
     );
@@ -394,6 +488,12 @@ function App() {
         prev.includes(item) ? prev.filter((i) => i !== item) : [...prev, item]
       );
 
+    // Helpers for grouping custom gear (not in base or subpacks)
+    const subpackAll = useMemo(() => Object.values(SUBPACKS).flat(), []);
+    const isCustomGear = (g) => !BASE_GEAR.includes(g) && !subpackAll.includes(g);
+
+    const customOnly = saved.gear.filter(isCustomGear);
+
     return (
       <div className="app dark">
         <div className="card" style={{ maxWidth: "720px", margin: "0 auto" }}>
@@ -403,35 +503,23 @@ function App() {
             </button>
             <button
               className="btn"
-              onClick={() =>
-                handleEdit(archive.findIndex((a) => a === saved))
-              }
+              onClick={() => handleEdit(archive.findIndex((a) => a === saved))}
             >
               Edit this Trip
             </button>
           </div>
 
           <h1 className="title">Saved Trip</h1>
-          <p>
-            <strong>Where:</strong> {saved.where}
-          </p>
-          <p>
-            <strong>Distance:</strong> {saved.distance}
-          </p>
-          <p>
-            <strong>Type:</strong> {saved.type}
-          </p>
-          <p>
-            <strong>Who:</strong> {saved.who}
-          </p>
-          <p>
-            <strong>Dates:</strong> {saved.dates}
-          </p>
+          <p><strong>Where:</strong> {saved.where}</p>
+          <p><strong>Distance:</strong> {saved.distance}</p>
+          <p><strong>Type:</strong> {saved.type}</p>
+          <p><strong>Who:</strong> {saved.who}</p>
+          <p><strong>Dates:</strong> {saved.dates}</p>
           {saved.mapImage && (
             <img src={saved.mapImage} alt="Map Snapshot" style={{ width: "100%" }} />
           )}
 
-          {/* Gear grouped by Base + Subpacks */}
+          {/* Gear grouped by Base + Subpacks + Custom */}
           <h2 style={{ marginTop: "1rem" }}>Packed Gear</h2>
           <h3>Base Gear</h3>
           <ul>
@@ -473,33 +561,22 @@ function App() {
             );
           })}
 
-          {/* Any remaining items not in base or subpacks (e.g., custom) */}
-          {saved.gear.some(
-            (g) =>
-              !BASE_GEAR.includes(g) &&
-              !Object.values(SUBPACKS).flat().includes(g)
-          ) && (
+          {customOnly.length > 0 && (
             <>
               <h3>Custom / Other</h3>
               <ul>
-                {saved.gear
-                  .filter(
-                    (g) =>
-                      !BASE_GEAR.includes(g) &&
-                      !Object.values(SUBPACKS).flat().includes(g)
-                  )
-                  .map((g) => (
-                    <li key={g}>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={packedGear.includes(g)}
-                          onChange={() => togglePacked(g)}
-                        />{" "}
-                        {g}
-                      </label>
-                    </li>
-                  ))}
+                {customOnly.map((g) => (
+                  <li key={g}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={packedGear.includes(g)}
+                        onChange={() => togglePacked(g)}
+                      />{" "}
+                      {g}
+                    </label>
+                  </li>
+                ))}
               </ul>
             </>
           )}
@@ -686,10 +763,15 @@ function App() {
               key={`${g}-${i}`}
               style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
             >
-              {g}
-              <button className="btn" onClick={() => removeGearItem(i)}>
-                Remove
-              </button>
+              <span>{g}</span>
+              <span style={{ display: "flex", gap: 6 }}>
+                <button className="btn" onClick={() => saveGearItemToLibrary(g)}>
+                  Save to Library
+                </button>
+                <button className="btn" onClick={() => removeGearItem(i)}>
+                  Remove
+                </button>
+              </span>
             </li>
           ))}
         </ul>
@@ -777,7 +859,7 @@ function App() {
               checked={saveDownloadToLib}
               onChange={(e) => setSaveDownloadToLib(e.target.checked)}
             />{" "}
-            Save to library
+              Save to library
           </label>
           <button className="btn" onClick={addCustomDownload}>
             Add
